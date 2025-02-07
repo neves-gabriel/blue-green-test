@@ -1,50 +1,50 @@
-// middleware.js
-import { NextResponse } from 'next/server';
-import { get } from '@vercel/edge-config';
+// Define your blue/green configuration (you can later replace this with a fetch from an external service)
+const blueGreenConfig = {
+  deploymentDomainBlue: 'blue-green-test.vercel.app',
+  deploymentDomainGreen: 'green--blue-green-test.vercel.app',
+  // Adjust the percentage as needed: 20 means 20% of traffic goes to green.
+  trafficGreenPercent: 20,
+};
 
-// Utility: choose deployment based on the traffic percentage
-function selectDeployment(config) {
-  // For simplicity, if trafficGreenPercent is 100, always choose green;
-  // if 0, choose blue. For percentages in between, use a random chance.
+// Helper function to select the deployment based on the traffic percentage.
+function selectDeployment() {
   const random = Math.random() * 100;
-  return random < config.trafficGreenPercent
-    ? config.deploymentDomainGreen
-    : config.deploymentDomainBlue;
+  return random < blueGreenConfig.trafficGreenPercent
+    ? blueGreenConfig.deploymentDomainGreen
+    : blueGreenConfig.deploymentDomainBlue;
 }
 
-export async function middleware(req) {
-  // Only process GET requests for HTML pages (skip API routes, static assets, etc.)
-  if (
-    req.method !== 'GET' ||
-    req.headers.get('sec-fetch-dest') !== 'document'
-  ) {
-    return NextResponse.next();
+export default async function middleware(request) {
+  // Only process GET requests for HTML pages.
+  if (request.method !== 'GET') {
+    return fetch(request);
   }
 
-  // Retrieve the blue-green configuration from Edge Config
-  const config = await get('blue-green-configuration');
+  const targetDomain = selectDeployment();
+  const url = new URL(request.url);
 
-  // If the configuration is missing, continue normally
-  if (!config) return NextResponse.next();
-
-  const targetDomain = selectDeployment(config);
-
-  // Check if the current host already matches the target; if so, no rewrite is needed.
-  if (req.nextUrl.hostname === targetDomain) {
-    return NextResponse.next();
+  // If the current hostname is already the target, simply continue.
+  if (url.hostname === targetDomain) {
+    return fetch(request);
   }
 
-  // Otherwise, clone the URL and update the hostname
-  const url = req.nextUrl.clone();
+  // Change the hostname to the target deployment.
   url.hostname = targetDomain;
 
-  // Optionally set a cookie so that subsequent requests in the session stick to the same deployment.
-  const response = NextResponse.rewrite(url);
-  response.cookies.set('__deployment', targetDomain, { path: '/' });
+  // Option 1: Redirect the client (visible change in URL)
+  // return Response.redirect(url.toString(), 307);
+
+  // Option 2: Proxy the request server-side (seamless rewrite)
+  const response = await fetch(url.toString(), {
+    method: request.method,
+    headers: request.headers,
+    body: request.body,
+  });
   return response;
 }
 
-// Apply this middleware to all routes.
+// Export the Edge Function configuration.
 export const config = {
+  runtime: 'edge',
   matcher: '/:path*',
 };
